@@ -1,20 +1,14 @@
 package etri.etriopenasr;
 
-import android.content.SharedPreferences;
 import android.os.Handler;
 import android.os.Message;
 import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
-//import android.util.Log;
 
-import android.view.inputmethod.EditorInfo;
-import android.view.KeyEvent;
+import android.util.Log;
 import android.view.View;
-import android.widget.AdapterView;
-import android.widget.ArrayAdapter;
 import android.widget.Button;
-import android.widget.EditText;
-import android.widget.Spinner;
+import android.widget.ImageButton;
 import android.widget.TextView;
 
 import android.media.AudioFormat;
@@ -22,9 +16,8 @@ import android.media.AudioRecord;
 import android.media.MediaRecorder;
 
 import com.google.gson.Gson;
-import android.util.Base64;
 
-import org.apache.commons.lang.StringEscapeUtils;
+import android.util.Base64;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedReader;
@@ -34,40 +27,41 @@ import java.io.InputStreamReader;
 import java.io.IOException;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Map;
 
+import org.json.*;
 
 public class MainActivity extends AppCompatActivity {
-
-    public static final String PREFS_NAME = "prefs";
     private static final String MSG_KEY = "status";
 
-    Button buttonStart;
-    TextView textResult;
-    Spinner spinnerMode;
-    EditText editID;
+    //    private static Button buttonStart;
+    private static ImageButton buttonStart;
+    private static TextView textResult;
 
-    String curMode;
-    String result;
+    private static String result;
+    private static JSONObject resultObj;
 
+    // 최대 녹음길이
     int maxLenSpeech = 16000 * 45;
-    byte [] speechData = new byte [maxLenSpeech * 2];
+    // 녹음한 데이터가 담길 배열
+    byte[] speechData = new byte[maxLenSpeech * 2];
     int lenSpeech = 0;
     boolean isRecording = false;
     boolean forceStop = false;
 
-    private final Handler handler = new Handler() {
+    private final MyHandler handler = new MyHandler();
+
+    private static class MyHandler extends Handler {
         @Override
-        public synchronized void handleMessage(Message msg) {
+        public void handleMessage(Message msg) {
             Bundle bd = msg.getData();
             String v = bd.getString(MSG_KEY);
             switch (msg.what) {
                 // 녹음이 시작되었음(버튼)
                 case 1:
                     textResult.setText(v);
-                    buttonStart.setText("PUSH TO STOP");
+//                    buttonStart.setText("PUSH TO STOP");
                     break;
                 // 녹음이 정상적으로 종료되었음(버튼 또는 max time)
                 case 2:
@@ -77,24 +71,48 @@ public class MainActivity extends AppCompatActivity {
                 // 녹음이 비정상적으로 종료되었음(마이크 권한 등)
                 case 3:
                     textResult.setText(v);
-                    buttonStart.setText("PUSH TO START");
+//                    buttonStart.setText("PUSH TO START");
                     break;
                 // 인식이 비정상적으로 종료되었음(timeout 등)
                 case 4:
                     textResult.setText(v);
                     buttonStart.setEnabled(true);
-                    buttonStart.setText("PUSH TO START");
+//                    buttonStart.setText("PUSH TO START");
                     break;
                 // 인식이 정상적으로 종료되었음 (thread내에서 exception포함)
                 case 5:
-                    textResult.setText(StringEscapeUtils.unescapeJava(result));
+                    Log.e("결과 : ", resultObj.toString());
+                    textResult.setText(getQuestionAndAnswer(resultObj));
                     buttonStart.setEnabled(true);
-                    buttonStart.setText("PUSH TO START");
+//                    buttonStart.setText("PUSH TO START");
                     break;
             }
             super.handleMessage(msg);
         }
-    };
+    }
+
+    private static String getQuestionAndAnswer(JSONObject obj) {
+        String recognition = "";
+
+        try {
+            recognition = resultObj.getJSONObject("return_object").getString("recognized");
+        } catch (JSONException e) {
+            e.printStackTrace();
+        }
+
+        if (recognition.contains("답은")) {
+            String question = recognition.substring(0, recognition.indexOf("답은"));
+            String answer = recognition.substring(recognition.indexOf("답은"));
+            if (question.matches(".*\\d+.*") && answer.matches(".*\\d+.*")) {
+                question = question.replaceAll("\\D+", "");
+                answer = answer.replaceAll("\\D+", "");
+                return "문제번호 : " + question + "\n답 : " + answer;
+            } else {
+                return "인식결과: " + recognition + "\n올바른 형식(X번의 답은 X번)으로 말해주세요.";
+            }
+        }
+        return "올바른 형식(X번의 답은 X번)으로 말해주세요.";
+    }
 
     public void SendMessage(String str, int id) {
         Message msg = handler.obtainMessage();
@@ -110,47 +128,15 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        buttonStart = (Button)findViewById(R.id.buttonStart);
-        textResult = (TextView)findViewById(R.id.textResult);
-        spinnerMode = (Spinner)findViewById(R.id.spinnerMode);
-        editID = (EditText)findViewById(R.id.editID);
+//        buttonStart = (Button) findViewById(R.id.buttonStart);
+        buttonStart = (ImageButton) findViewById(R.id.buttonStart);
+        textResult = (TextView) findViewById(R.id.textResult);
 
-        SharedPreferences settings = getSharedPreferences(PREFS_NAME, 0);
-        editID.setText(settings.getString("client-id", "YOUR_CLIENT_ID"));
-
-        ArrayList<String> modeArr = new ArrayList<>();
-        modeArr.add("한국어인식");
-        modeArr.add("영어인식");
-        modeArr.add("영어발음평가");
-        ArrayAdapter<String> modeAdapter = new ArrayAdapter<>(
-                this, android.R.layout.simple_spinner_item, modeArr);
-        modeAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        spinnerMode.setAdapter(modeAdapter);
-        spinnerMode.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-            public void onItemSelected(AdapterView<?> parent, View view, int pos, long id) {
-                curMode = parent.getItemAtPosition(pos).toString();
-            }
-            public void onNothingSelected(AdapterView<?> parent) {
-                curMode = "";
-            }
-        });
-
-        editID.setOnEditorActionListener(new EditText.OnEditorActionListener() {
-            @Override
-            public boolean onEditorAction(TextView v, int actionId, KeyEvent event) {
-                if(actionId== EditorInfo.IME_ACTION_DONE){
-                    SharedPreferences settings = getSharedPreferences(PREFS_NAME, 0);
-                    SharedPreferences.Editor editor = settings.edit();
-                    editor.putString("client-id", v.getText().toString());
-                    editor.apply();
-                }
-                return false;
-            }
-        });
-
-        buttonStart.setOnClickListener(new  View.OnClickListener() {
+        buttonStart.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
+                // isRecording은 원래 false.
                 if (isRecording) {
+                    // 녹음중인 상태에서 다시 버튼 클릭시 녹음 강제종료
                     forceStop = true;
                 } else {
                     try {
@@ -158,6 +144,7 @@ public class MainActivity extends AppCompatActivity {
                             public void run() {
                                 SendMessage("Recording...", 1);
                                 try {
+                                    // 녹음
                                     recordSpeech();
                                     SendMessage("Recognizing...", 2);
                                 } catch (RuntimeException e) {
@@ -168,8 +155,15 @@ public class MainActivity extends AppCompatActivity {
                                 Thread threadRecog = new Thread(new Runnable() {
                                     public void run() {
                                         result = sendDataAndGetResult();
+                                        try {
+                                            resultObj = new JSONObject(result);
+                                        } catch (JSONException e) {
+                                            e.printStackTrace();
+                                        }
                                     }
                                 });
+
+                                // 결과 얻는 스레드를 시작
                                 threadRecog.start();
                                 try {
                                     threadRecog.join(20000);
@@ -189,7 +183,7 @@ public class MainActivity extends AppCompatActivity {
                         forceStop = false;
                         isRecording = false;
                     }
-                } 
+                }
             }
         });
     }
@@ -197,7 +191,7 @@ public class MainActivity extends AppCompatActivity {
     public static String readStream(InputStream in) throws IOException {
         StringBuilder sb = new StringBuilder();
         BufferedReader r = new BufferedReader(new InputStreamReader(in),1000);
-        for (String line = r.readLine(); line != null; line =r.readLine()){
+        for (String line = r.readLine(); line != null; line = r.readLine()) {
             sb.append(line);
         }
         in.close();
@@ -217,18 +211,21 @@ public class MainActivity extends AppCompatActivity {
                     AudioFormat.ENCODING_PCM_16BIT,
                     bufferSize);
             lenSpeech = 0;
+
+            // 오디오 권한 안줬을때 에러
             if (audio.getState() != AudioRecord.STATE_INITIALIZED) {
                 throw new RuntimeException("ERROR: Failed to initialize audio device. Allow app to access microphone");
-            }
-            else {
-                short [] inBuffer = new short [bufferSize];
+            } else {
+                short[] inBuffer = new short[bufferSize];
                 forceStop = false;
+                // 버튼 다시 클릭시에도 forceStop이 true로.
                 isRecording = true;
                 audio.startRecording();
                 while (!forceStop) {
                     int ret = audio.read(inBuffer, 0, bufferSize);
-                    for (int i = 0; i < ret ; i++ ) {
+                    for (int i = 0; i < ret; i++) {
                         if (lenSpeech >= maxLenSpeech) {
+                            // 혹은 최대 길이를 넘어가도 forceStop
                             forceStop = true;
                             break;
                         }
@@ -241,33 +238,19 @@ public class MainActivity extends AppCompatActivity {
                 audio.release();
                 isRecording = false;
             }
-        } catch(Throwable t) {
+        } catch (Throwable t) {
             throw new RuntimeException(t.toString());
         }
     }
 
-	public String sendDataAndGetResult () {
+    public String sendDataAndGetResult() {
         String openApiURL = "http://aiopen.etri.re.kr:8000/WiseASR/Recognition";
-        String accessKey = editID.getText().toString().trim();
-        String languageCode;
+        // api key
+        String accessKey = "";
         String audioContents;
 
+        // 자바 객체를 JSON으로 변환해주는 라이브러리 by Google
         Gson gson = new Gson();
-
-        switch (curMode) {
-            case "한국어인식":
-                languageCode = "korean";
-                break;
-            case "영어인식":
-                languageCode = "english";
-                break;
-            case "영어발음평가":
-                languageCode = "english";
-                openApiURL = "http://aiopen.etri.re.kr:8000/WiseASR/Pronunciation";
-                break;
-            default:
-                return "ERROR: invalid mode";
-        }
 
         Map<String, Object> request = new HashMap<>();
         Map<String, String> argument = new HashMap<>();
@@ -275,7 +258,8 @@ public class MainActivity extends AppCompatActivity {
         audioContents = Base64.encodeToString(
                 speechData, 0, lenSpeech*2, Base64.NO_WRAP);
 
-        argument.put("language_code", languageCode);
+        // 한국어인식
+        argument.put("language_code", "korean");
         argument.put("audio", audioContents);
 
         request.put("access_key", accessKey);
@@ -286,17 +270,18 @@ public class MainActivity extends AppCompatActivity {
         String responBody;
         try {
             url = new URL(openApiURL);
-            HttpURLConnection con = (HttpURLConnection)url.openConnection();
+            HttpURLConnection con = (HttpURLConnection) url.openConnection();
             con.setRequestMethod("POST");
             con.setDoOutput(true);
 
             DataOutputStream wr = new DataOutputStream(con.getOutputStream());
+            // 요청을 gson으로 감싸서 전달
             wr.write(gson.toJson(request).getBytes("UTF-8"));
             wr.flush();
             wr.close();
 
             responseCode = con.getResponseCode();
-            if ( responseCode == 200 ) {
+            if (responseCode == 200) {
                 InputStream is = new BufferedInputStream(con.getInputStream());
                 responBody = readStream(is);
                 return responBody;
